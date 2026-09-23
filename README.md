@@ -33,7 +33,7 @@ grep -rl + --exclude-dir 排除参数     → 1.5s，19 项（完整）
 pi install /absolute/path/to/pi-grep-guard
 
 # git 源（发布到 GitHub 后）
-pi install git:github.com/<you>/pi-grep-guard
+pi install git:github.com/zhuq1995/pi-grep-guard
 ```
 
 安装后重启 pi 生效。
