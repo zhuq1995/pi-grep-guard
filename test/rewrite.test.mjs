@@ -1,9 +1,15 @@
 // pi-grep-guard 逻辑单测：node --experimental-strip-types test/rewrite.test.mjs
 // 断言直接 import 生产代码（src/rewrite.ts），不做逻辑复制。
-import { addExcludes, EXCLUDE_ARGS } from "../src/rewrite.ts"
+import { addExcludes, buildExcludeArgs, DEFAULT_EXCLUDE_DIRS } from "../src/rewrite.ts"
 
+let fail = 0
+function check(cond, label, detail = "") {
+  if (!cond) fail++
+  console.log(`${cond ? "PASS" : "FAIL"} | ${label}${detail ? " -> " + detail : ""}`)
+}
+
+// ---- 改写用例：[input, expectRewritten, label] ----
 const cases = [
-  // [input, expectRewritten, label]
   ['grep -rn "foo" .', true, "plain recursive grep"],
   ["cd /x && grep -rl foo source/ | head", true, "compound with pipe"],
   ["git grep foo", false, "git grep untouched"],
@@ -24,23 +30,29 @@ const cases = [
   ["find . -name '*.ts' | xargs grep -l foo", true, "xargs grep"],
   ["grep --exclude-dir=.svn -rn foo .", true, "idempotence handled by caller (still appends here)"],
 ]
-
-let fail = 0
 for (const [input, expect, label] of cases) {
   const got = addExcludes(input)
   const changed = got !== input
-  const ok = changed === expect
-  if (!ok) fail++
-  console.log(`${ok ? "PASS" : "FAIL"} | ${label}${changed ? " -> " + got.slice(0, 110) : ""}`)
+  check(changed === expect, label, changed ? got.slice(0, 110) : "")
 }
 
-// 参数完整性：每个排除目录都要带上
-for (const dir of [".svn", ".vs", ".git", "node_modules", "obj"]) {
-  if (!EXCLUDE_ARGS.includes(`--exclude-dir=${dir}`)) {
-    console.log(`FAIL | EXCLUDE_ARGS missing ${dir}`)
-    fail++
-  }
-}
+// ---- 参数构造（配置化）----
+check(
+  buildExcludeArgs() === "--exclude-dir=.svn --exclude-dir=.vs --exclude-dir=.git --exclude-dir=node_modules --exclude-dir=obj",
+  "default exclude args"
+)
+check(buildExcludeArgs(["a", "b"]) === "--exclude-dir=a --exclude-dir=b", "custom list")
+check(buildExcludeArgs([]) === "", "empty list -> empty args")
+check(
+  buildExcludeArgs(["my dir", "ok", 'bad"quote', "semi;colon"]) === "--exclude-dir=ok",
+  "unsafe entries filtered"
+)
+check(addExcludes("grep -rn x .", "") === "grep -rn x .", "empty args -> no rewrite")
+check(
+  addExcludes("grep -rn x .", buildExcludeArgs(["only"])) === "grep --exclude-dir=only -rn x .",
+  "custom args applied"
+)
+check(DEFAULT_EXCLUDE_DIRS.length === 5, "defaults exported (5 dirs)")
 
 console.log(fail === 0 ? "\nALL PASS" : `\n${fail} FAILURES`)
 process.exit(fail === 0 ? 0 : 1)

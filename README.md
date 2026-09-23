@@ -43,19 +43,30 @@ pi install /absolute/path/to/pi-grep-guard
 
 ## 配置
 
-- 排除目录列表在 `src/rewrite.ts` 的 `EXCLUDE_ARGS`，按需增删；
+配置文件 `~/.pi/pi-grep-guard-config.json`（首次运行时自动创建）:
+
+```json
+{
+  "excludeDirs": [".svn", ".vs", ".git", "node_modules", "obj"]
+}
+```
+
+- 修改后**即时生效**（每次命令执行前读取），无需重启 pi；
+- 置为空数组 `[]` 即停用改写；
+- 目录名仅允许 `A-Za-z0-9._-`；含空格/引号等的条目会被忽略（避免拼进 shell 命令出问题）；
 - 临时禁用：环境变量 `GREP_GUARD_DISABLED=1`；
 - 改写日志会以 `[grep-guard] +exclude-dir: ...` 输出到 pi 日志，便于排查。
 
 ## 开发
 
 ```bash
-npm test    # node --experimental-strip-types test/rewrite.test.mjs（19 用例）
+npm test    # node --experimental-strip-types test/rewrite.test.mjs（26 断言）
 ```
 
 结构：
 
 - `src/rewrite.ts` — 纯字符串改写逻辑（跨平台、无 IO、可单测）
+- `src/config.ts` — 读取 `~/.pi/pi-grep-guard-config.json`（缺失时自动创建）
 - `src/index.ts` — pi 扩展入口（tool_call 钩子）
 - `test/rewrite.test.mjs` — 直接 import 生产代码的单测
 

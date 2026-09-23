@@ -1,28 +1,42 @@
-// grep 命令改写核心逻辑（纯字符串处理，跨平台，可单测）。
+// grep 命令改写核心逻辑（纯字符串处理，跨平台、无 IO，可单测）。
 //
 // 为什么：Windows + .svn/.vs/node_modules 双版本控制目录下，递归 grep 是
 // I/O 密集型，实测同一查询 90s 超时且结果被截断（4 项），追加排除后 1.5s
 // 完整返回（19 项）。排除 .svn 等目录即消除 60× 以上的浪费。
 
-export const EXCLUDE_ARGS =
-  "--exclude-dir=.svn --exclude-dir=.vs --exclude-dir=.git --exclude-dir=node_modules --exclude-dir=obj"
+export const DEFAULT_EXCLUDE_DIRS = [".svn", ".vs", ".git", "node_modules", "obj"]
 
 // 命令行位置上的裸 grep；跳过 `git grep`（它的选项集不同，没有 --exclude-dir）
 const GREP_RE = /(?<!git\s+)\bgrep\b(?=[\s;|&)]|$)/g
 
-function rewriteSegment(seg: string): string {
-  return seg.replace(GREP_RE, (m) => `${m} ${EXCLUDE_ARGS}`)
+// 目录名安全字符集：避免空格/引号/shell 元字符被拼进命令
+const SAFE_DIR_RE = /^[A-Za-z0-9._-]+$/
+
+/**
+ * 把目录名列表转成 grep 参数串（`--exclude-dir=a --exclude-dir=b`）。
+ * 含不安全字符的条目会被忽略；空列表返回空串（调用方应据此跳过改写）。
+ */
+export function buildExcludeArgs(dirs: string[] = DEFAULT_EXCLUDE_DIRS): string {
+  return dirs
+    .filter((d) => typeof d === "string" && SAFE_DIR_RE.test(d))
+    .map((d) => `--exclude-dir=${d}`)
+    .join(" ")
+}
+
+function rewriteSegment(seg: string, excludeArgs: string): string {
+  return seg.replace(GREP_RE, (m) => `${m} ${excludeArgs}`)
 }
 
 /**
- * 给命令中所有（非 git 的）grep 追加 --exclude-dir 参数。
+ * 给命令中所有（非 git 的）grep 追加排除参数。
  *
  * - 引号感知：单/双引号内的 grep（字符串、sed 脚本等）不改写；
  * - 非递归 grep 会静默忽略 --exclude-dir，所以无需检测 -r，统一追加即可；
  * - `ls | grep x`、`cd x && grep y`、`xargs grep` 等复合场景均覆盖；
  * - 幂等：调用方需先检查命令是否已含 --exclude-dir（见 index.ts）。
  */
-export function addExcludes(cmd: string): string {
+export function addExcludes(cmd: string, excludeArgs: string = buildExcludeArgs()): string {
+  if (!excludeArgs) return cmd
   let out = ""
   let quote: string | null = null
   for (let i = 0; i < cmd.length; i++) {
@@ -36,7 +50,7 @@ export function addExcludes(cmd: string): string {
     } else {
       let j = i
       while (j < cmd.length && cmd[j] !== "'" && cmd[j] !== '"') j++
-      out += rewriteSegment(cmd.slice(i, j))
+      out += rewriteSegment(cmd.slice(i, j), excludeArgs)
       i = j - 1
     }
   }

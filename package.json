@@ -1,6 +1,6 @@
 {
   "name": "pi-grep-guard",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "pi 扩展：自动为 bash 里的 grep 追加 --exclude-dir，跳过 .svn/.vs/node_modules 等重量级目录",
   "keywords": ["pi-package"],
   "license": "MIT",
