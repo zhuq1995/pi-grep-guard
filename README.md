@@ -47,7 +47,13 @@ pi install /absolute/path/to/pi-grep-guard
 
 ```json
 {
-  "excludeDirs": [".svn", ".vs", ".git", "node_modules", "obj"]
+  "excludeDirs": [
+    ".svn", ".git", ".vs", ".vscode", ".idea", ".cache",
+    "node_modules", "packages", ".nuget",
+    "bin", "obj", "dist", "build", "out", "target",
+    ".next", ".turbo", ".angular",
+    "__pycache__", ".venv", "venv"
+  ]
 }
 ```
 

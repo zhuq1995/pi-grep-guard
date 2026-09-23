@@ -4,7 +4,14 @@
 // I/O 密集型，实测同一查询 90s 超时且结果被截断（4 项），追加排除后 1.5s
 // 完整返回（19 项）。排除 .svn 等目录即消除 60× 以上的浪费。
 
-export const DEFAULT_EXCLUDE_DIRS = [".svn", ".vs", ".git", "node_modules", "obj"]
+// 默认排除：版本控制 / IDE 缓存 / 依赖包 / 构建产物 / Python 缓存（按需在配置中增删）
+export const DEFAULT_EXCLUDE_DIRS = [
+  ".svn", ".git", ".vs", ".vscode", ".idea", ".cache",
+  "node_modules", "packages", ".nuget",
+  "bin", "obj", "dist", "build", "out", "target",
+  ".next", ".turbo", ".angular",
+  "__pycache__", ".venv", "venv",
+]
 
 // 命令行位置上的裸 grep；跳过 `git grep`（它的选项集不同，没有 --exclude-dir）
 const GREP_RE = /(?<!git\s+)\bgrep\b(?=[\s;|&)]|$)/g

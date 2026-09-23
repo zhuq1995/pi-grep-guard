@@ -38,8 +38,8 @@ for (const [input, expect, label] of cases) {
 
 // ---- 参数构造（配置化）----
 check(
-  buildExcludeArgs() === "--exclude-dir=.svn --exclude-dir=.vs --exclude-dir=.git --exclude-dir=node_modules --exclude-dir=obj",
-  "default exclude args"
+  buildExcludeArgs() === DEFAULT_EXCLUDE_DIRS.map((d) => `--exclude-dir=${d}`).join(" "),
+  "default exclude args (derived from DEFAULT_EXCLUDE_DIRS)"
 )
 check(buildExcludeArgs(["a", "b"]) === "--exclude-dir=a --exclude-dir=b", "custom list")
 check(buildExcludeArgs([]) === "", "empty list -> empty args")
@@ -52,7 +52,7 @@ check(
   addExcludes("grep -rn x .", buildExcludeArgs(["only"])) === "grep --exclude-dir=only -rn x .",
   "custom args applied"
 )
-check(DEFAULT_EXCLUDE_DIRS.length === 5, "defaults exported (5 dirs)")
+check(DEFAULT_EXCLUDE_DIRS.length === 21, "defaults exported (21 dirs)")
 
 console.log(fail === 0 ? "\nALL PASS" : `\n${fail} FAILURES`)
 process.exit(fail === 0 ? 0 : 1)
