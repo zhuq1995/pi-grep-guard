@@ -1,43 +1,35 @@
 # pi-grep-guard
 
-[pi](https://github.com/earendil-works/pi-coding-agent) 扩展：在 bash 命令执行前，自动给 `grep` 追加 `--exclude-dir`，跳过 `.svn` / `.vs` / `.git` / `node_modules` / `obj` 这些重量级目录。
+[pi](https://github.com/earendil-works/pi-coding-agent) 扩展：在 bash 工具执行命令前，自动给可安全识别的 `grep` 追加 `--exclude-dir`，默认跳过 `.svn`、`.git`、`.vs` 和 `node_modules`。
 
-## 为什么需要它
+## 用途
 
-在 Windows + 老项目（`.svn` 与 `.git` 双版本控制、VS 缓存）环境下，递归 `grep` 是纯 I/O 等待，且 pi 的 bash 超时会截断结果——**不只是慢，还会静默漏结果**：
-
-```
-同一查询 "R001" @ 某项目 source/（27k 文件）：
-grep -rl                             → 90s 超时，仅 4 项（结果不完整）
-grep -rl + --exclude-dir 排除参数     → 1.5s，19 项（完整）
-```
-
-根因是 `.svn/pristine`（每文件历史副本）与 `.vs/FileContentIndex` 被全量遍历。本扩展让 agent（以及你自己的 `!` 命令）不必记得手写排除参数。
+递归搜索时，版本控制目录、IDE 缓存和依赖目录会增加搜索范围。插件为可安全识别的 `grep` 命令添加排除参数，具体目录由配置文件决定。
 
 ## 工作原理
 
-- 监听 `bash` 工具的 `tool_call` 事件，在命令执行前原地改写；
-- 只给**引号之外**的命令词位置上的 `grep` 追加参数，字符串 / `sed` 脚本里的 "grep" 不动；
-- 跳过 `git grep`（它的选项集不同）；
-- 非递归 `grep` 会静默忽略 `--exclude-dir`，因此无需判断 `-r`，统一追加；
-- 覆盖复合命令：`cd x && grep y`、`ls | grep y`、`xargs grep y`、`rtk grep y`；
-- 幂等：命令里已有 `--exclude-dir` 时不做任何事；
-- 失败开放：任何意外都放行原命令，绝不阻断执行。
+- 监听 Pi 的 `bash` 工具的 `tool_call` 事件，在命令执行前改写；不覆盖用户的 `!` / `!!` 命令、`powershell` 工具或 `ffgrep`；
+- 只给能确定是 `grep` 的命令追加参数，不修改其他命令的参数、引号中的文本或注释，跳过 `git grep`；
+- 支持一般 grep、管道、`&&` 和 `xargs grep` 等用法；当命令包含重定向、变量展开或 heredoc（多行文本输入）等无法安全识别的语法时，整条命令保持原样；
+- 幂等按单个 grep 判断：已有 `--exclude-dir` 的 grep 不追加，但不影响后续独立 grep；
+- 失败开放：任何意外都放行原命令，不阻断执行。
 
-它**不替换** grep 为 rg（那是 [`@piotr-oles/pi-reflag`](https://pi.dev/packages/@piotr-oles/pi-reflag) 的做法，速度更快但 rg 默认跳过隐藏目录，`.notes/` 等目录会静默漏结果）——本扩展保持 grep 语义完全不变。
+本扩展不将 grep 替换为 rg。追加的排除参数会让递归搜索跳过对应目录，因此这些目录内的匹配不会出现在结果中；如需搜索它们，请调整配置或临时禁用扩展。非递归搜索通常不受目录排除影响。
 
 ## 安装
 
 ```bash
-# git 源(推荐钉版本,避免上游变动影响)
-pi install git:github.com/zhuq1995/pi-grep-guard@v1.0.0
-
-# 跟随主干(未钉版本)
 pi install git:github.com/zhuq1995/pi-grep-guard
 
-# 本地路径(开发时)
+# 本地路径安装
+# Windows
+pi install C:/path/to/pi-grep-guard
+
+# macOS / Linux
 pi install /absolute/path/to/pi-grep-guard
 ```
+
+Pi 配置中只保留一个 `pi-grep-guard` 来源，避免重复加载。
 
 安装后重启 pi 生效。
 
@@ -48,11 +40,7 @@ pi install /absolute/path/to/pi-grep-guard
 ```json
 {
   "excludeDirs": [
-    ".svn", ".git", ".vs", ".vscode", ".idea", ".cache",
-    "node_modules", "packages", ".nuget",
-    "bin", "obj", "dist", "build", "out", "target",
-    ".next", ".turbo", ".angular",
-    "__pycache__", ".venv", "venv"
+    ".svn", ".git", ".vs", "node_modules"
   ]
 }
 ```
@@ -66,7 +54,7 @@ pi install /absolute/path/to/pi-grep-guard
 ## 开发
 
 ```bash
-npm test    # node --experimental-strip-types test/rewrite.test.mjs（26 断言）
+npm test    # 运行改写逻辑和入口钩子测试
 ```
 
 结构：
@@ -75,6 +63,7 @@ npm test    # node --experimental-strip-types test/rewrite.test.mjs（26 断言�
 - `src/config.ts` — 读取 `~/.pi/pi-grep-guard-config.json`（缺失时自动创建）
 - `src/index.ts` — pi 扩展入口（tool_call 钩子）
 - `test/rewrite.test.mjs` — 直接 import 生产代码的单测
+- `test/hook.test.mjs` — 使用隔离临时 home 测试入口钩子与配置
 
 ## 许可证
 

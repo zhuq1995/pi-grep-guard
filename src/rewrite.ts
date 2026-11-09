@@ -1,28 +1,9 @@
-// grep 命令改写核心逻辑（纯字符串处理，跨平台、无 IO，可单测）。
-//
-// 为什么：Windows + .svn/.vs/node_modules 双版本控制目录下，递归 grep 是
-// I/O 密集型，实测同一查询 90s 超时且结果被截断（4 项），追加排除后 1.5s
-// 完整返回（19 项）。排除 .svn 等目录即消除 60× 以上的浪费。
+// grep 命令改写核心逻辑（纯字符串处理，跨平台、无 IO）。
+export const DEFAULT_EXCLUDE_DIRS = [".svn", ".git", ".vs", "node_modules"]
 
-// 默认排除：版本控制 / IDE 缓存 / 依赖包 / 构建产物 / Python 缓存（按需在配置中增删）
-export const DEFAULT_EXCLUDE_DIRS = [
-  ".svn", ".git", ".vs", ".vscode", ".idea", ".cache",
-  "node_modules", "packages", ".nuget",
-  "bin", "obj", "dist", "build", "out", "target",
-  ".next", ".turbo", ".angular",
-  "__pycache__", ".venv", "venv",
-]
-
-// 命令行位置上的裸 grep；跳过 `git grep`（它的选项集不同，没有 --exclude-dir）
-const GREP_RE = /(?<!git\s+)\bgrep\b(?=[\s;|&)]|$)/g
-
-// 目录名安全字符集：避免空格/引号/shell 元字符被拼进命令
 const SAFE_DIR_RE = /^[A-Za-z0-9._-]+$/
 
-/**
- * 把目录名列表转成 grep 参数串（`--exclude-dir=a --exclude-dir=b`）。
- * 含不安全字符的条目会被忽略；空列表返回空串（调用方应据此跳过改写）。
- */
+/** 把安全的目录名列表转成 grep 参数串；空列表禁用改写。 */
 export function buildExcludeArgs(dirs: string[] = DEFAULT_EXCLUDE_DIRS): string {
   return dirs
     .filter((d) => typeof d === "string" && SAFE_DIR_RE.test(d))
@@ -30,36 +11,129 @@ export function buildExcludeArgs(dirs: string[] = DEFAULT_EXCLUDE_DIRS): string 
     .join(" ")
 }
 
-function rewriteSegment(seg: string, excludeArgs: string): string {
-  return seg.replace(GREP_RE, (m) => `${m} ${excludeArgs}`)
+type Word = { value: string; end: number; bare: boolean }
+type Token = { kind: "word"; word: Word } | { kind: "separator" }
+
+// Only accept a deliberately small shell grammar. In particular, redirections
+// (including heredocs and here-strings), expansions, escapes and shell compound
+// constructs are left to bash unchanged rather than approximating their syntax.
+function tokenize(cmd: string): Token[] | null {
+  const tokens: Token[] = []
+  let i = 0
+  while (i < cmd.length) {
+    const c = cmd[i]
+    if (c === " " || c === "\t" || c === "\r") { i++; continue }
+    if (c === "#") {
+      while (i < cmd.length && cmd[i] !== "\n") i++
+      continue
+    }
+    if (c === "\n" || c === ";" || c === "|" || c === "&") {
+      if (c === "&" && cmd[i + 1] !== "&") return null
+      if (c === ";" && (cmd[i + 1] === ";" || cmd[i + 1] === "&")) return null
+      if (c === "|" && cmd[i + 1] === "&") return null
+      tokens.push({ kind: "separator" })
+      i += (c === "|" || c === "&") && cmd[i + 1] === c ? 2 : 1
+      continue
+    }
+    let value = ""
+    let bare = true
+    while (i < cmd.length && !/[ \t\r\n;|&]/.test(cmd[i])) {
+      const ch = cmd[i]
+      if (ch === "'" || ch === '"') {
+        bare = false
+        const quote = ch
+        i++
+        while (i < cmd.length && cmd[i] !== quote) {
+          // Double-quoted expansions and escapes require full shell evaluation.
+          if (quote === '"' && /[$`\\]/.test(cmd[i])) return null
+          value += cmd[i++]
+        }
+        if (i === cmd.length) return null
+        i++
+      } else {
+        // These can change parsing, expand into words, or introduce shell syntax.
+        if (/[<>$`\\(){}*?\[\]~]/.test(ch)) return null
+        value += ch
+        i++
+      }
+    }
+    tokens.push({ kind: "word", word: { value, end: i, bare } })
+  }
+  return tokens
+}
+const GREP_LONG_VALUE_OPTIONS: Record<string, true> = {
+  "--regexp": true, "--file": true, "--max-count": true, "--after-context": true,
+  "--before-context": true, "--context": true, "--directories": true, "--devices": true,
+  "--include": true, "--exclude": true, "--exclude-from": true, "--label": true,
+  "--binary-files": true,
+}
+const GREP_SHORT_VALUE_OPTIONS: Record<string, true> = {
+  e: true, f: true, m: true, A: true, B: true, C: true, d: true, D: true,
 }
 
-/**
- * 给命令中所有（非 git 的）grep 追加排除参数。
- *
- * - 引号感知：单/双引号内的 grep（字符串、sed 脚本等）不改写；
- * - 非递归 grep 会静默忽略 --exclude-dir，所以无需检测 -r，统一追加即可；
- * - `ls | grep x`、`cd x && grep y`、`xargs grep` 等复合场景均覆盖；
- * - 幂等：调用方需先检查命令是否已含 --exclude-dir（见 index.ts）。
- */
-export function addExcludes(cmd: string, excludeArgs: string = buildExcludeArgs()): string {
-  if (!excludeArgs) return cmd
-  let out = ""
-  let quote: string | null = null
-  for (let i = 0; i < cmd.length; i++) {
-    const c = cmd[i]
-    if (quote) {
-      out += c
-      if (c === quote && cmd[i - 1] !== "\\") quote = null
-    } else if (c === "'" || c === '"') {
-      quote = c
-      out += c
-    } else {
-      let j = i
-      while (j < cmd.length && cmd[j] !== "'" && cmd[j] !== '"') j++
-      out += rewriteSegment(cmd.slice(i, j), excludeArgs)
-      i = j - 1
+function hasExcludeOption(args: Word[]): boolean {
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i].value
+    if (arg === "--") return false
+    if (arg === "--exclude-dir" || arg.startsWith("--exclude-dir=")) return true
+    if (arg.startsWith("--")) {
+      if (!arg.includes("=") && GREP_LONG_VALUE_OPTIONS[arg]) i++
+    } else if (arg.startsWith("-") && arg !== "-") {
+      for (let j = 1; j < arg.length; j++) {
+        if (GREP_SHORT_VALUE_OPTIONS[arg[j]]) {
+          if (j === arg.length - 1) i++
+          break
+        }
+      }
     }
   }
-  return out
+  return false
+}
+const SHELL_KEYWORDS: Record<string, true> = {
+  if: true, then: true, else: true, elif: true, fi: true, for: true, while: true,
+  until: true, do: true, done: true, case: true, esac: true, in: true,
+  select: true, function: true, coproc: true, time: true, "!": true, "[[": true, "]]": true,
+}
+
+/** 只改写可确定为独立命令或简单 xargs/command 调用的裸 grep。 */
+export function addExcludes(cmd: string, excludeArgs: string = buildExcludeArgs()): string {
+  if (!excludeArgs) return cmd
+  const tokens = tokenize(cmd)
+  if (!tokens) return cmd
+  const insertions: number[] = []
+  let segment: Word[] = []
+  const processSegment = (): boolean => {
+    if (!segment.length) return true
+    const first = segment[0]
+    // Assignments, reserved words and ambiguous command names need shell parsing.
+    if ((first.bare && SHELL_KEYWORDS[first.value]) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(first.value)) return false
+    let index = 0
+    if (first.bare && first.value === "command") {
+      index = 1
+    } else if (first.bare && first.value === "xargs") {
+      index = 1
+      // Only flags without operands; options such as -I can alter command words.
+      while (index < segment.length && segment[index].bare && /^-(?:0|r|t|p|x)+$/.test(segment[index].value)) index++
+      if (segment[index]?.bare && segment[index].value === "--") index++
+    }
+    const command = segment[index]
+    if (command?.bare && command.value === "grep" && !hasExcludeOption(segment.slice(index + 1))) {
+      insertions.push(command.end)
+    }
+    return true
+  }
+  for (const token of tokens) {
+    if (token.kind === "word") segment.push(token.word)
+    else {
+      if (!processSegment()) return cmd
+      segment = []
+    }
+  }
+  if (!processSegment()) return cmd
+  let result = cmd
+  for (let i = insertions.length - 1; i >= 0; i--) {
+    const at = insertions[i]
+    result = result.slice(0, at) + " " + excludeArgs + result.slice(at)
+  }
+  return result
 }

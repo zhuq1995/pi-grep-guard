@@ -10,7 +10,7 @@
     "extensions": ["./src/index.ts"]
   },
   "scripts": {
-    "test": "node --experimental-strip-types test/rewrite.test.mjs"
+    "test": "node --experimental-strip-types test/rewrite.test.mjs && node --experimental-strip-types test/hook.test.mjs"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*"
